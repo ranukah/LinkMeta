@@ -1,5 +1,5 @@
 # LinkMeta
-LinkMeta is designed to be used as an API. To extract metadata from a URL using LinkMeta, you need to make a GET request to the API endpoint with the required parameters.
+LinkMeta is designed to be used as an API. To extract metadata such as the webpage title, meta description, and image URL from a URL using LinkMeta, you need to make a GET request to the API endpoint with the required parameters.
 
 ### API Endpoint
 
