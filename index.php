@@ -1,87 +1,125 @@
 <?php
+declare(strict_types=1);
 
 // Array of valid API keys
-$apiKeys = array(
-    "your_api_key1",
-    "your_api_key2",
-    "your_api_key3",
+$apiKeys = [
+    'your_api_key1',
+    'your_api_key2',
+    'your_api_key3',
     // Add more keys as needed
-);
+];
 
-// Function to verify API key
-function isValidApiKey($apiKey) {
-    return in_array($apiKey, $GLOBALS['apiKeys']);
+/**
+ * Check if API key is valid.
+ */
+function isValidApiKey(string $key): bool
+{
+    return in_array($key, $GLOBALS['apiKeys'], true);
 }
 
-// Function to get webpage content using UTF-8 encoding
-function getWebPageContent($url) {
+/**
+ * Fetch webpage content with cURL and UTF-8 support.
+ * Throws exception on error.
+ */
+function getWebPageContent(string $url): string
+{
     if (!filter_var($url, FILTER_VALIDATE_URL)) {
-        throw new Exception("Invalid URL provided");
+        throw new InvalidArgumentException('Invalid URL provided');
     }
 
     $curl = curl_init();
-    curl_setopt($curl, CURLOPT_URL, $url);
-    curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($curl, CURLOPT_FOLLOWLOCATION, true);
-    curl_setopt($curl, CURLOPT_HEADER, 0);
-    curl_setopt($curl, CURLOPT_ENCODING, '');
-    curl_setopt($curl, CURLOPT_SSL_VERIFYPEER, true); // SSL Certificate verification
+    curl_setopt_array($curl, [
+        CURLOPT_URL            => $url,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_HEADER         => false,
+        CURLOPT_ENCODING       => '',
+        CURLOPT_SSL_VERIFYPEER => true,
+        CURLOPT_TIMEOUT        => 10,
+        CURLOPT_USERAGENT      => 'MetadataFetcher/1.0',
+    ]);
+
     $data = curl_exec($curl);
     if (curl_errno($curl)) {
-        throw new Exception("Error retrieving URL content: " . curl_error($curl));
+        throw new RuntimeException('Error retrieving URL content: ' . curl_error($curl));
     }
     curl_close($curl);
+
     return $data;
 }
 
-// Function to extract meta data with UTF-8 support
-function extractMetaData($html) {
+/**
+ * Extract title, description, and og:image from HTML.
+ */
+function extractMetaData(string $html): array
+{
+    libxml_use_internal_errors(true);
     $doc = new DOMDocument();
-    @$doc->loadHTML(mb_convert_encoding($html, 'HTML-ENTITIES', 'UTF-8'));
-    $nodes = $doc->getElementsByTagName('title');
-    $title = $nodes->item(0)->nodeValue;
+    $doc->loadHTML(mb_convert_encoding($html, 'HTML-ENTITIES', 'UTF-8'));
+    libxml_clear_errors();
 
-    $metaTags = $doc->getElementsByTagName('meta');
+    $title = '';
     $description = '';
     $image = '';
 
-    foreach ($metaTags as $tag) {
-        if ($tag->getAttribute('name') == 'description') {
-            $description = $tag->getAttribute('content');
+    $titles = $doc->getElementsByTagName('title');
+    if ($titles->length > 0) {
+        $title = trim($titles->item(0)->textContent);
+    }
+
+    foreach ($doc->getElementsByTagName('meta') as $meta) {
+        $nameAttr = strtolower($meta->getAttribute('name'));
+        $propAttr = strtolower($meta->getAttribute('property'));
+
+        if ($nameAttr === 'description') {
+            $description = $meta->getAttribute('content');
         }
-        if ($tag->getAttribute('property') == 'og:image') {
-            $image = $tag->getAttribute('content');
+        if ($propAttr === 'og:image') {
+            $image = $meta->getAttribute('content');
         }
     }
 
-    return array($title, $description, $image);
+    return [$title, $description, $image];
+}
+
+/**
+ * Send JSON response with proper headers and status code.
+ */
+function sendJsonResponse(array $payload, int $status = 200): void
+{
+    http_response_code($status);
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
 }
 
 // Main logic
 try {
-    header('Content-Type: application/json; charset=utf-8');
-    if (!isset($_GET['api_key']) || !isValidApiKey($_GET['api_key'])) {
-        http_response_code(401);
-        throw new Exception('Invalid or missing API key');
+    $apiKey = $_GET['api_key'] ?? '';
+    if (!isValidApiKey($apiKey)) {
+        sendJsonResponse(['error' => 'Invalid or missing API key'], 401);
+        exit;
     }
 
-    if (!isset($_GET['url'])) {
-        throw new Exception("No URL provided");
+    $url = $_GET['url'] ?? '';
+    if (empty($url)) {
+        throw new InvalidArgumentException('No URL provided');
     }
 
-    $url = $_GET['url'];
     $htmlContent = getWebPageContent($url);
-    list($title, $description, $image) = extractMetaData($htmlContent);
+    [$title, $description, $image] = extractMetaData($htmlContent);
 
-    echo json_encode([
-        'title' => $title,
-        'url' => $url,
+    sendJsonResponse([
+        'title'       => $title,
+        'url'         => $url,
         'description' => $description,
-        'image' => $image
-    ], JSON_UNESCAPED_UNICODE);
+        'image'       => $image,
+    ]);
+} catch (InvalidArgumentException $e) {
+    sendJsonResponse(['error' => $e->getMessage()], 400);
+} catch (RuntimeException $e) {
+    sendJsonResponse(['error' => $e->getMessage()], 502);
+} catch (JsonException $e) {
+    sendJsonResponse(['error' => 'JSON encoding error'], 500);
 } catch (Exception $e) {
-    http_response_code(500);
-    echo json_encode(['error' => $e->getMessage()]);
+    sendJsonResponse(['error' => $e->getMessage()], 500);
 }
-
-?>
